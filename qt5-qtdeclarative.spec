@@ -7,27 +7,38 @@
 # global bootstrap 1
 
 %if ! 0%{?bootstrap}
-%ifarch %{arm} %{ix86} x86_64
 %global docs 1
-%global tests 1
-%endif
+%global tests 0
 %endif
 
+%if 0
+#ifarch %{ix86}
 %global nosse2_hack 1
+## TODO:
+# * consider debian's approach of runtime detection instead:
+#   https://codereview.qt-project.org/#/c/127354/
+%endif
+
+# definition borrowed from qtbase
+%global multilib_archs x86_64 %{ix86} %{?mips} ppc64 ppc s390x s390 sparc64 sparcv9
 
 Summary: Qt5 - QtDeclarative component
 Name:    qt5-%{qt_module}
-Version: 5.6.2
+Version: 5.9.2
 Release: 1%{?dist}
 
 # See LICENSE.GPL LICENSE.LGPL LGPL_EXCEPTION.txt, for details
 License: LGPLv2 with exceptions or GPLv3 with exceptions
 Url:     http://www.qt.io
-Source0: http://download.qt.io/official_releases/qt/5.6/%{version}/submodules/%{qt_module}-opensource-src-%{version}.tar.xz
+Source0: http://download.qt.io/official_releases/qt/5.9/%{version}/submodules/%{qt_module}-opensource-src-%{version}.tar.xz
+
+# header file to workaround multilib issue
+# https://bugzilla.redhat.com/show_bug.cgi?id=1441343
+Source5: qv4global_p-multilib.h
 
 # support no_sse2 CONFIG (fedora i686 builds cannot assume -march=pentium4 -msse2 -mfpmath=sse flags, or the JIT that needs them)
 # https://codereview.qt-project.org/#change,73710
-Patch1: qtdeclarative-opensource-src-5.5.0-no_sse2.patch
+Patch1: qtdeclarative-opensource-src-5.9.0-no_sse2.patch
 
 # workaround for possible deadlock condition in QQuickShaderEffectSource
 # https://bugzilla.redhat.com/show_bug.cgi?id=1237269
@@ -37,18 +48,15 @@ Patch2: qtdeclarative-QQuickShaderEffectSource_deadlock.patch
 ## upstream patches
 
 ## upstreamable patches
-# use system double-conversation
-%if 0%{?fedora}
-%global system_doubleconv 1
-BuildRequires: double-conversion-devel
-%endif
-Patch200: qtdeclarative-system_doubleconv.patch
+
 # https://bugs.kde.org/show_bug.cgi?id=346118#c108
 Patch201: qtdeclarative-kdebug346118.patch
 
-## upstream patches under review
-# Check-for-NULL-from-glGetStrin
-Patch500: Check-for-NULL-from-glGetString.patch
+# https://codereview.qt-project.org/#/c/127354/
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=792594
+Patch202: http://sources.debian.net/data/main/q/qtdeclarative-opensource-src/5.9.0~beta3-2/debian/patches/Do-not-make-lack-of-SSE2-support-on-x86-32-fatal.patch
+
+%global __provides_exclude_from ^%{_qt5_archdatadir}/qml/.*\\.so$
 
 Obsoletes: qt5-qtjsbackend < 5.2.0
 
@@ -93,7 +101,8 @@ License: GFDL
 Requires: %{name} = %{version}-%{release}
 BuildRequires: qt5-qdoc
 BuildRequires: qt5-qhelpgenerator
-BuildArch: noarch
+# FTBS: same problem as qtbase
+# BuildArch: noarch
 %description doc
 %{summary}.
 %endif
@@ -111,24 +120,11 @@ Requires: %{name}%{?_isa} = %{version}-%{release}
 %patch1 -p1 -b .no_sse2
 %endif
 %patch2 -p1 -b .QQuickShaderEffectSource_deadlock
-
-%if 0%{?system_doubleconv}
-%patch200 -p1 -b .system_doubleconv
-rm -rfv src/3rdparty/double-conversion
-%endif
 %patch201 -p0 -b .kdebug346118
-
-%patch500 -p1 -b .Check-for-NULL-from-glGetString
+%patch202 -p1 -b .no_sse2_non_fatal
 
 
 %build
-mkdir %{_target_platform}
-pushd %{_target_platform}
-%{qmake_qt5} ..
-popd
-
-make %{?_smp_mflags} -C %{_target_platform}
-
 %if 0%{?nosse2_hack}
 # build libQt5Qml with no_sse2
 mkdir -p %{_target_platform}-no_sse2
@@ -139,13 +135,17 @@ make %{?_smp_mflags} -C src/qml
 popd
 %endif
 
+# no shadow builds until fixed: https://bugreports.qt.io/browse/QTBUG-37417
+%{qmake_qt5}
+
 %if 0%{?docs}
-make %{?_smp_mflags} docs -C %{_target_platform}
+make %{?_smp_mflags} docs
 %endif
 
+make %{?_smp_mflags}
 
 %install
-make install INSTALL_ROOT=%{buildroot} -C %{_target_platform}
+make install INSTALL_ROOT=%{buildroot}
 
 %if 0%{?nosse2_hack}
 mkdir -p %{buildroot}%{_qt5_libdir}/sse2
@@ -154,7 +154,14 @@ make install INSTALL_ROOT=%{buildroot} -C %{_target_platform}-no_sse2/src/qml
 %endif
 
 %if 0%{?docs}
-make install_docs INSTALL_ROOT=%{buildroot} -C %{_target_platform}
+make install_docs INSTALL_ROOT=%{buildroot}
+%endif
+
+%ifarch %{multilib_archs}
+# multilib: qv4global_p.h
+  mv %{buildroot}%{_qt5_headerdir}/QtQml/%{version}/QtQml/private/qv4global_p.h \
+     %{buildroot}%{_qt5_headerdir}/QtQml/%{version}/QtQml/private/qv4global_p-%{__isa_bits}.h
+  install -p -m644 -D %{SOURCE5} %{buildroot}%{_qt5_headerdir}/QtQml/%{version}/QtQml/private/qv4global_p.h
 %endif
 
 # hardlink files to %{_bindir}, add -qt5 postfix to not conflict
@@ -184,40 +191,31 @@ popd
 # nuke .prl reference(s) to %%buildroot, excessive (.la-like) libs
 pushd %{buildroot}%{_qt5_libdir}
 for prl_file in libQt5*.prl ; do
-  sed -i \
-    -e "/^QMAKE_PRL_BUILD_DIR/d" \
-    -e "/-ldouble-conversion/d" \
-    ${prl_file}
-  if [ -f "$(basename ${prl_file} .prl).so" ]; then
-    rm -fv "$(basename ${prl_file} .prl).la"
-  else
-    sed -i \
-       -e "/^QMAKE_PRL_LIBS/d" \
-       -e "/-ldouble-conversion/d" \
-       $(basename ${prl_file} .prl).la
-  fi
+  sed -i -e "/^QMAKE_PRL_BUILD_DIR/d" ${prl_file}
+  rm -fv "$(basename ${prl_file} .prl).la"
+  sed -i -e "/^QMAKE_PRL_LIBS/d" ${prl_file}
 done
 popd
 
+
 %check
-test -z "$(grep double-conversion %{buildroot}%{_qt5_libdir}/*.{la,prl})"
 %if 0%{?tests}
 export CTEST_OUTPUT_ON_FAILURE=1
 export PATH=%{buildroot}%{_qt5_bindir}:$PATH
 export LD_LIBRARY_PATH=%{buildroot}%{_qt5_libdir}
-make sub-tests-all %{?_smp_mflags} -C %{_target_platform}
+make sub-tests-all %{?_smp_mflags}
 xvfb-run -a \
 dbus-launch --exit-with-session \
 time \
-make check -k -C %{_target_platform}/tests ||:
+make check -k -C tests ||:
 %endif
+
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
 
 %files
-%{!?_licensedir:%global license %%doc}
-%license LICENSE.LGPL* LGPL_EXCEPTION.txt
+%license LICENSE.LGPL*
 %{_qt5_libdir}/libQt5Qml.so.5*
 %if 0%{?nosse2_hack}
 %{_qt5_libdir}/sse2/libQt5Qml.so.5*
@@ -228,8 +226,6 @@ make check -k -C %{_target_platform}/tests ||:
 %{_qt5_libdir}/libQt5QuickTest.so.5*
 %{_qt5_plugindir}/qmltooling/
 %{_qt5_archdatadir}/qml/
-%dir %{_qt5_libdir}/cmake/Qt5Qml/
-%{_qt5_libdir}/cmake/Qt5Qml/Qt5Qml_*Factory.cmake
 
 %files devel
 %{_bindir}/qml*
@@ -243,10 +239,17 @@ make check -k -C %{_target_platform}/tests ||:
 %{_qt5_libdir}/cmake/Qt5*/Qt5*Config*.cmake
 %{_qt5_libdir}/pkgconfig/Qt5*.pc
 %{_qt5_archdatadir}/mkspecs/modules/*.pri
+%{_qt5_archdatadir}/mkspecs/features/*.prf
+%dir %{_qt5_libdir}/cmake/Qt5Qml/
+%{_qt5_libdir}/cmake/Qt5Qml/Qt5Qml_*Factory.cmake
 
 %files static
-%{_qt5_libdir}/libQt5QmlDevTools.*a
+%{_qt5_libdir}/libQt5QmlDevTools.a
 %{_qt5_libdir}/libQt5QmlDevTools.prl
+%{_qt5_libdir}/libQt5PacketProtocol.a
+%{_qt5_libdir}/libQt5PacketProtocol.prl
+%{_qt5_libdir}/libQt5QmlDebug.a
+%{_qt5_libdir}/libQt5QmlDebug.prl
 
 %if 0%{?docs}
 %files doc
@@ -255,13 +258,25 @@ make check -k -C %{_target_platform}/tests ||:
 %{_qt5_docdir}/qtqml/
 %{_qt5_docdir}/qtquick.qch
 %{_qt5_docdir}/qtquick/
-%endif
 
 %files examples
 %{_qt5_examplesdir}/
+%endif
 
 
 %changelog
+* Fri Oct 06 2017 Jan Grulich <jgrulich@redhat.com> - 5.9.2-1
+- Update to 5.9.2
+  Resolves: bz#1482778
+
+* Mon Sep 04 2017 Jan Grulich <jgrulich@redhat.com> - 5.9.1-2
+- Enable documentation
+  Resolves: bz#1482778
+
+* Mon Aug 21 2017 Jan Grulich <jgrulich@redhat.com> - 5.9.1-1
+- Update to 5.9.1
+  Resolves: bz#1482778
+
 * Wed Jan 11 2017 Jan Grulich <jgrulich@redhat.com> - 5.6.2-1
 - Update to 5.6.2
   Resolves: bz#1384817
