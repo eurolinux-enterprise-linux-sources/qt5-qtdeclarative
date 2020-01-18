@@ -15,17 +15,15 @@
 
 %global nosse2_hack 1
 
-#define prerelease
-
 Summary: Qt5 - QtDeclarative component
 Name:    qt5-%{qt_module}
-Version: 5.6.1
-Release: 10%{?prerelease:.%{prerelease}}%{?dist}
+Version: 5.6.2
+Release: 1%{?dist}
 
 # See LICENSE.GPL LICENSE.LGPL LGPL_EXCEPTION.txt, for details
 License: LGPLv2 with exceptions or GPLv3 with exceptions
 Url:     http://www.qt.io
-Source0: http://download.qt.io/snapshots/qt/5.6/%{version}%{?prerelease:-%{prerelease}}/submodules/%{qt_module}-opensource-src-%{version}%{?prerelease:-%{prerelease}}.tar.xz
+Source0: http://download.qt.io/official_releases/qt/5.6/%{version}/submodules/%{qt_module}-opensource-src-%{version}.tar.xz
 
 # support no_sse2 CONFIG (fedora i686 builds cannot assume -march=pentium4 -msse2 -mfpmath=sse flags, or the JIT that needs them)
 # https://codereview.qt-project.org/#change,73710
@@ -38,9 +36,6 @@ Patch2: qtdeclarative-QQuickShaderEffectSource_deadlock.patch
 
 ## upstream patches
 
-# https://bugreports.qt.io/browse/QTBUG-53761
-Patch100: qt5-qtdeclarative-5.6.1-only-release-types-when-they-are-not-referenced-anymore.patch
-
 ## upstreamable patches
 # use system double-conversation
 %if 0%{?fedora}
@@ -50,8 +45,6 @@ BuildRequires: double-conversion-devel
 Patch200: qtdeclarative-system_doubleconv.patch
 # https://bugs.kde.org/show_bug.cgi?id=346118#c108
 Patch201: qtdeclarative-kdebug346118.patch
-# additional i686/qml workaround (on top of existing patch135),  https://bugzilla.redhat.com/1331593
-Patch235: qtdeclarative-opensource-src-5.6.0-qml_no-lifetime-dse.patch
 
 ## upstream patches under review
 # Check-for-NULL-from-glGetStrin
@@ -64,7 +57,7 @@ BuildRequires: qt5-qtbase-devel >= %{version}
 BuildRequires: qt5-qtbase-private-devel
 %{?_qt5:Requires: %{_qt5}%{?_isa} = %{_qt5_version}}
 %if ! 0%{?bootstrap}
-BuildRequires: pkgconfig(Qt5XmlPatterns)
+BuildRequires: qt5-qtxmlpatterns-devel
 %endif
 BuildRequires: python
 
@@ -113,20 +106,17 @@ Requires: %{name}%{?_isa} = %{version}-%{release}
 
 
 %prep
-%setup -q -n %{qt_module}-opensource-src-%{version}%{?prerelease:-%{prerelease}}
+%setup -q -n %{qt_module}-opensource-src-%{version}
 %if 0%{?nosse2_hack}
 %patch1 -p1 -b .no_sse2
 %endif
 %patch2 -p1 -b .QQuickShaderEffectSource_deadlock
-
-%patch100 -p1 -b .only-release-types-when-they-are-not-referenced-anymore
 
 %if 0%{?system_doubleconv}
 %patch200 -p1 -b .system_doubleconv
 rm -rfv src/3rdparty/double-conversion
 %endif
 %patch201 -p0 -b .kdebug346118
-%patch235 -p1 -b .qml_no-lifetime-dse
 
 %patch500 -p1 -b .Check-for-NULL-from-glGetString
 
@@ -194,15 +184,23 @@ popd
 # nuke .prl reference(s) to %%buildroot, excessive (.la-like) libs
 pushd %{buildroot}%{_qt5_libdir}
 for prl_file in libQt5*.prl ; do
-  sed -i -e "/^QMAKE_PRL_BUILD_DIR/d" ${prl_file}
+  sed -i \
+    -e "/^QMAKE_PRL_BUILD_DIR/d" \
+    -e "/-ldouble-conversion/d" \
+    ${prl_file}
   if [ -f "$(basename ${prl_file} .prl).so" ]; then
     rm -fv "$(basename ${prl_file} .prl).la"
-    sed -i -e "/^QMAKE_PRL_LIBS/d" ${prl_file}
+  else
+    sed -i \
+       -e "/^QMAKE_PRL_LIBS/d" \
+       -e "/-ldouble-conversion/d" \
+       $(basename ${prl_file} .prl).la
   fi
 done
 popd
 
 %check
+test -z "$(grep double-conversion %{buildroot}%{_qt5_libdir}/*.{la,prl})"
 %if 0%{?tests}
 export CTEST_OUTPUT_ON_FAILURE=1
 export PATH=%{buildroot}%{_qt5_bindir}:$PATH
@@ -264,6 +262,10 @@ make check -k -C %{_target_platform}/tests ||:
 
 
 %changelog
+* Wed Jan 11 2017 Jan Grulich <jgrulich@redhat.com> - 5.6.2-1
+- Update to 5.6.2
+  Resolves: bz#1384817
+
 * Tue Aug 30 2016 Jan Grulich <jgrulich@redhat.com> - 5.6.1-10
 - Increase build version to have newer version than in EPEL
   Resolves: bz#1317400

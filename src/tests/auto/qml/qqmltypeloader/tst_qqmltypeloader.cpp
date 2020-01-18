@@ -48,6 +48,7 @@ private slots:
     void testLoadComplete();
     void loadComponentSynchronously();
     void trimCache();
+    void trimCache2();
 };
 
 void tst_QQMLTypeLoader::testLoadComplete()
@@ -86,10 +87,19 @@ void tst_QQMLTypeLoader::trimCache()
         url.setQuery(QString::number(i));
 
         QQmlTypeData *data = loader.getType(url);
-        if (i % 5 == 0) // keep references to some of them so that they aren't trimmed
-            data->compiledData()->addref();
+        // Run an event loop to receive the callback that release()es.
+        QTRY_COMPARE(data->count(), 2);
 
-        data->release();
+        // keep references to some of them so that they aren't trimmed. References to either the
+        // QQmlTypeData or its compiledData() should prevent the trimming.
+        if (i % 10 == 0) {
+            // keep ref on data, don't add ref on data->compiledData()
+        } else if (i % 5 == 0) {
+            data->compiledData()->addref();
+            data->release();
+        } else {
+            data->release();
+        }
     }
 
     for (int i = 0; i < 256; ++i) {
@@ -101,6 +111,19 @@ void tst_QQMLTypeLoader::trimCache()
             QVERIFY(!loader.isTypeLoaded(url));
         // The cache is free to keep the others.
     }
+}
+
+void tst_QQMLTypeLoader::trimCache2()
+{
+    QQuickView *window = new QQuickView();
+    window->setSource(testFileUrl("trim_cache2.qml"));
+    QQmlTypeLoader &loader = QQmlEnginePrivate::get(window->engine())->typeLoader;
+    // in theory if gc has already run this could be false
+    // QCOMPARE(loader.isTypeLoaded(testFileUrl("MyComponent2.qml")), true);
+    window->engine()->collectGarbage();
+    QTest::qWait(1);    // force event loop
+    window->engine()->trimComponentCache();
+    QCOMPARE(loader.isTypeLoaded(testFileUrl("MyComponent2.qml")), false);
 }
 
 QTEST_MAIN(tst_QQMLTypeLoader)
