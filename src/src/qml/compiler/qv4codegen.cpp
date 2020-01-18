@@ -489,6 +489,7 @@ Codegen::Codegen(bool strict)
 }
 
 void Codegen::generateFromProgram(const QString &fileName,
+                                  const QString &finalUrl,
                                   const QString &sourceCode,
                                   Program *node,
                                   QV4::IR::Module *module,
@@ -501,6 +502,7 @@ void Codegen::generateFromProgram(const QString &fileName,
     _env = 0;
 
     _module->setFileName(fileName);
+    _module->setFinalUrl(finalUrl);
 
     ScanFunctions scan(this, sourceCode, mode);
     scan(node);
@@ -511,12 +513,14 @@ void Codegen::generateFromProgram(const QString &fileName,
 }
 
 void Codegen::generateFromFunctionExpression(const QString &fileName,
+                                             const QString &finalUrl,
                                              const QString &sourceCode,
                                              AST::FunctionExpression *ast,
                                              QV4::IR::Module *module)
 {
     _module = module;
     _module->setFileName(fileName);
+    _module->setFinalUrl(finalUrl);
     _env = 0;
 
     ScanFunctions scan(this, sourceCode, GlobalCode);
@@ -2098,6 +2102,15 @@ int Codegen::defineFunction(const QString &name, AST::Node *ast,
     IR::BasicBlock *exitBlock = function->newBasicBlock(0, IR::Function::DontInsertBlock);
     function->hasDirectEval = _env->hasDirectEval || _env->compilationMode == EvalCode
             || _module->debugMode; // Conditional breakpoints are like eval in the function
+
+    // When a user writes the following QML signal binding:
+    //    onSignal: function() { doSomethingUsefull }
+    // we will generate a binding function that just returns the closure. However, that's not useful
+    // at all, because if the onSignal is a signal handler, the user is actually making it explicit
+    // that the binding is a function, so we should execute that. However, we don't know that during
+    // AOT compilation, so mark the surrounding function as only-returning-a-closure.
+    function->returnsClosure = cast<ExpressionStatement *>(ast) && cast<FunctionExpression *>(cast<ExpressionStatement *>(ast)->expression);
+
     function->usesArgumentsObject = _env->parent && (_env->usesArgumentsObject == Environment::ArgumentsObjectUsed);
     function->usesThis = _env->usesThis;
     function->maxNumberOfArguments = qMax(_env->maxNumberOfArguments, (int)QV4::Global::ReservedArgumentCount);

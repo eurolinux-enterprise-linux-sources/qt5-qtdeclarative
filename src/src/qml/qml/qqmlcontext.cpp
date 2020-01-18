@@ -528,7 +528,7 @@ QQmlContextData::QQmlContextData()
 QQmlContextData::QQmlContextData(QQmlContext *ctxt)
     : engine(0), isInternal(false), isJSContext(false),
       isPragmaLibraryContext(false), unresolvedNames(false), hasEmittedDestruction(false), isRootObjectInCreation(false),
-      publicContext(ctxt), incubator(0), componentObjectIndex(-1),
+      stronglyReferencedByParent(false), publicContext(ctxt), incubator(0), componentObjectIndex(-1),
       contextObject(0), nextChild(0), prevChild(0),
       expressions(0), contextObjects(0), idValues(0), idValueCount(0),
       componentAttached(0)
@@ -569,7 +569,10 @@ void QQmlContextData::invalidate()
 
     while (childContexts) {
         Q_ASSERT(childContexts != this);
-        childContexts->invalidate();
+        if (childContexts->stronglyReferencedByParent && !--childContexts->refCount)
+            childContexts->destroy();
+        else
+            childContexts->invalidate();
     }
 
     if (prevChild) {
@@ -578,6 +581,8 @@ void QQmlContextData::invalidate()
         nextChild = 0;
         prevChild = 0;
     }
+
+    importedScripts.clear();
 
     engine = 0;
     parent = 0;
@@ -654,12 +659,16 @@ void QQmlContextData::destroy()
     delete this;
 }
 
-void QQmlContextData::setParent(QQmlContextData *p)
+void QQmlContextData::setParent(QQmlContextData *p, bool stronglyReferencedByParent)
 {
     if (p == parent)
         return;
     if (p) {
+        Q_ASSERT(!parent);
         parent = p;
+        this->stronglyReferencedByParent = stronglyReferencedByParent;
+        if (stronglyReferencedByParent)
+            ++refCount; // balanced in QQmlContextData::invalidate()
         engine = p->engine;
         nextChild = p->childContexts;
         if (nextChild) nextChild->prevChild = &nextChild;
@@ -845,14 +854,14 @@ QV4::IdentifierHash<int> &QQmlContextData::detachedPropertyNames()
 QUrl QQmlContextData::url() const
 {
     if (typeCompilationUnit)
-        return typeCompilationUnit->url();
+        return typeCompilationUnit->finalUrl();
     return baseUrl;
 }
 
 QString QQmlContextData::urlString() const
 {
     if (typeCompilationUnit)
-        return typeCompilationUnit->fileName();
+        return typeCompilationUnit->finalUrlString();
     return baseUrlString;
 }
 

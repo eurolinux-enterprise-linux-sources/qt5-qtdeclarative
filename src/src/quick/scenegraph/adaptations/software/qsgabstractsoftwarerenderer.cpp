@@ -193,6 +193,12 @@ QRegion QSGAbstractSoftwareRenderer::optimizeRenderList()
         }
     }
 
+    if (m_obscuredRegion.contains(m_background->rect().toAlignedRect())) {
+        m_isOpaque = true;
+    } else {
+        m_isOpaque = false;
+    }
+
     // Empty dirtyRegion (for second pass)
     m_dirtyRegion = QRegion();
     m_obscuredRegion = QRegion();
@@ -227,11 +233,11 @@ void QSGAbstractSoftwareRenderer::setBackgroundColor(const QColor &color)
     renderableNode(m_background)->markMaterialDirty();
 }
 
-void QSGAbstractSoftwareRenderer::setBackgroundSize(const QSize &size)
+void QSGAbstractSoftwareRenderer::setBackgroundRect(const QRect &rect)
 {
-    if (m_background->rect().size().toSize() == size)
+    if (m_background->rect().toRect() == rect)
         return;
-    m_background->setRect(0.0f, 0.0f, size.width(), size.height());
+    m_background->setRect(rect);
     renderableNode(m_background)->markGeometryDirty();
     // Invalidate the whole scene when the background is resized
     markDirty();
@@ -242,9 +248,9 @@ QColor QSGAbstractSoftwareRenderer::backgroundColor()
     return m_background->color();
 }
 
-QSize QSGAbstractSoftwareRenderer::backgroundSize()
+QRect QSGAbstractSoftwareRenderer::backgroundRect()
 {
-    return m_background->rect().size().toSize();
+    return m_background->rect().toRect();
 }
 
 void QSGAbstractSoftwareRenderer::nodeAdded(QSGNode *node)

@@ -214,6 +214,7 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     internalClasses[Class_SimpleArrayData] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::SimpleArrayData::staticVTable());
     internalClasses[Class_SparseArrayData] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::SparseArrayData::staticVTable());
     internalClasses[Class_ExecutionContext] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::ExecutionContext::staticVTable());
+    internalClasses[EngineBase::Class_QmlContext] = internalClasses[EngineBase::Class_ExecutionContext]->changeVTable(QV4::QmlContext::staticVTable());
     internalClasses[Class_CallContext] = internalClasses[EngineBase::Class_Empty]->changeVTable(QV4::CallContext::staticVTable());
 
     jsStrings[String_Empty] = newIdentifier(QString());
@@ -256,6 +257,7 @@ ExecutionEngine::ExecutionEngine(EvalISelFactory *factory)
     InternalClass *ic = internalClasses[Class_Empty]->changeVTable(QV4::Object::staticVTable());
     jsObjects[ObjectProto] = memoryManager->allocObject<ObjectPrototype>(ic);
     internalClasses[Class_Object] = ic->changePrototype(objectPrototype()->d());
+    internalClasses[EngineBase::Class_QmlContextWrapper] = internalClasses[Class_Object]->changeVTable(QV4::QmlContextWrapper::staticVTable());
 
     ic = newInternalClass(ArrayPrototype::staticVTable(), objectPrototype());
     Q_ASSERT(ic->prototype);
@@ -478,10 +480,8 @@ ExecutionEngine::~ExecutionEngine()
     delete identifierTable;
     delete memoryManager;
 
-    QSet<QV4::CompiledData::CompilationUnit*> remainingUnits;
-    qSwap(compilationUnits, remainingUnits);
-    for (QV4::CompiledData::CompilationUnit *unit : qAsConst(remainingUnits))
-        unit->unlink();
+    while (!compilationUnits.isEmpty())
+        (*compilationUnits.begin())->unlink();
 
     internalClasses[Class_Empty]->destroy();
     delete classPool;
@@ -886,14 +886,14 @@ QUrl ExecutionEngine::resolvedUrl(const QString &file)
     while (c) {
         CallContext *callCtx = c->asCallContext();
         if (callCtx && callCtx->d()->v4Function) {
-            base.setUrl(callCtx->d()->v4Function->sourceFile());
+            base = callCtx->d()->v4Function->finalUrl();
             break;
         }
         c = parentContext(c);
     }
 
     if (base.isEmpty() && globalCode)
-        base.setUrl(globalCode->sourceFile());
+        base = globalCode->finalUrl();
 
     if (base.isEmpty())
         return src;
@@ -953,9 +953,8 @@ void ExecutionEngine::markObjects()
 
     drainMarkStack(this, markBase);
 
-    for (QSet<CompiledData::CompilationUnit*>::ConstIterator it = compilationUnits.constBegin(), end = compilationUnits.constEnd();
-         it != end; ++it) {
-        (*it)->markObjects(this);
+    for (auto compilationUnit: compilationUnits) {
+        compilationUnit->markObjects(this);
         drainMarkStack(this, markBase);
     }
 }

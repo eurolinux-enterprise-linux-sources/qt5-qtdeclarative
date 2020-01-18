@@ -32,9 +32,14 @@
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qqmlcomponent.h>
 #include <QtQml/qqmlincubator.h>
+#include <QtQuick/qquickview.h>
 #include <private/qquickloader_p.h>
+#include <private/qquickwindowmodule_p.h>
 #include "testhttpserver.h"
 #include "../../shared/util.h"
+#include "../shared/geometrytestutil.h"
+
+Q_LOGGING_CATEGORY(lcTests, "qt.quick.tests")
 
 class SlowComponent : public QQmlComponent
 {
@@ -113,6 +118,8 @@ private slots:
     void parented();
     void sizeBound();
     void QTBUG_30183();
+    void transientWindow();
+    void nestedTransientWindow();
 
     void sourceComponentGarbageCollection();
 
@@ -403,10 +410,16 @@ void tst_QQuickLoader::sizeItemToLoader()
     QCOMPARE(rect->height(), 80.0);
 
     // Check resize
-    loader->setWidth(180);
-    loader->setHeight(30);
-    QCOMPARE(rect->width(), 180.0);
-    QCOMPARE(rect->height(), 30.0);
+    QSizeChangeListener sizeListener(rect);
+    const QSizeF size(180, 30);
+    loader->setSize(size);
+    QVERIFY2(!sizeListener.isEmpty(), "There should be at least one signal about the size changed");
+    for (const QSizeF sizeOnGeometryChanged : sizeListener) {
+        // Check that we have the correct size on all signals
+        QCOMPARE(sizeOnGeometryChanged, size);
+    }
+    QCOMPARE(rect->width(), size.width());
+    QCOMPARE(rect->height(), size.height());
 
     // Switch mode
     loader->resetWidth(); // reset explicit size
@@ -1198,6 +1211,86 @@ void tst_QQuickLoader::QTBUG_30183()
     QCOMPARE(rect->height(), 120.0);
 
     delete loader;
+}
+
+void tst_QQuickLoader::transientWindow() // QTBUG-52944
+{
+    QQuickView view;
+    view.setSource(testFileUrl("itemLoaderWindow.qml"));
+    QQuickItem *root = qobject_cast<QQuickItem*>(view.rootObject());
+    QVERIFY(root);
+    QQuickLoader *loader = root->findChild<QQuickLoader *>();
+    QVERIFY(loader);
+    QTRY_COMPARE(loader->status(), QQuickLoader::Ready);
+    QQuickWindowQmlImpl *loadedWindow = qobject_cast<QQuickWindowQmlImpl *>(loader->item());
+    QVERIFY(loadedWindow);
+    QCOMPARE(loadedWindow->visibility(), QWindow::Hidden);
+
+    QElapsedTimer timer;
+    qint64 viewVisibleTime = -1;
+    qint64 loadedWindowVisibleTime = -1;
+    connect(&view, &QWindow::visibleChanged,
+            [&viewVisibleTime, &timer]() { viewVisibleTime = timer.elapsed(); } );
+    connect(loadedWindow, &QQuickWindowQmlImpl::visibilityChanged,
+            [&loadedWindowVisibleTime, &timer]() { loadedWindowVisibleTime = timer.elapsed(); } );
+    timer.start();
+    view.show();
+
+    QTest::qWaitForWindowExposed(&view);
+    QTRY_VERIFY(loadedWindowVisibleTime >= 0);
+    QVERIFY(viewVisibleTime >= 0);
+
+    // now that we're sure they are both visible, which one became visible first?
+    qCDebug(lcTests) << "transient Window became visible" << (loadedWindowVisibleTime - viewVisibleTime) << "ms after the root Item";
+    QVERIFY((loadedWindowVisibleTime - viewVisibleTime) >= 0);
+
+    QWindowList windows = QGuiApplication::topLevelWindows();
+    QTRY_COMPARE(windows.size(), 2);
+
+    // TODO Ideally we would now close the outer window and make sure the transient window closes too.
+    // It works during manual testing because of QWindowPrivate::maybeQuitOnLastWindowClosed()
+    // but quitting an autotest doesn't make sense.
+}
+
+void tst_QQuickLoader::nestedTransientWindow() // QTBUG-52944
+{
+    QQuickView view;
+    view.setSource(testFileUrl("itemLoaderItemWindow.qml"));
+    QQuickItem *root = qobject_cast<QQuickItem*>(view.rootObject());
+    QVERIFY(root);
+    QQuickLoader *loader = root->findChild<QQuickLoader *>();
+    QVERIFY(loader);
+    QTRY_COMPARE(loader->status(), QQuickLoader::Ready);
+    QQuickItem *loadedItem = qobject_cast<QQuickItem *>(loader->item());
+    QVERIFY(loadedItem);
+    QQuickWindowQmlImpl *loadedWindow = loadedItem->findChild<QQuickWindowQmlImpl *>();
+    QVERIFY(loadedWindow);
+    QCOMPARE(loadedWindow->visibility(), QWindow::Hidden);
+
+    QElapsedTimer timer;
+    qint64 viewVisibleTime = -1;
+    qint64 loadedWindowVisibleTime = -1;
+    connect(&view, &QWindow::visibleChanged,
+            [&viewVisibleTime, &timer]() { viewVisibleTime = timer.elapsed(); } );
+    connect(loadedWindow, &QQuickWindowQmlImpl::visibilityChanged,
+            [&loadedWindowVisibleTime, &timer]() { loadedWindowVisibleTime = timer.elapsed(); } );
+    timer.start();
+    view.show();
+
+    QTest::qWaitForWindowExposed(&view);
+    QTRY_VERIFY(loadedWindowVisibleTime >= 0);
+    QVERIFY(viewVisibleTime >= 0);
+
+    // now that we're sure they are both visible, which one became visible first?
+    qCDebug(lcTests) << "transient Window became visible" << (loadedWindowVisibleTime - viewVisibleTime) << "ms after the root Item";
+    QVERIFY((loadedWindowVisibleTime - viewVisibleTime) >= 0);
+
+    QWindowList windows = QGuiApplication::topLevelWindows();
+    QTRY_COMPARE(windows.size(), 2);
+
+    // TODO Ideally we would now close the outer window and make sure the transient window closes too.
+    // It works during manual testing because of QWindowPrivate::maybeQuitOnLastWindowClosed()
+    // but quitting an autotest doesn't make sense.
 }
 
 void tst_QQuickLoader::sourceComponentGarbageCollection()

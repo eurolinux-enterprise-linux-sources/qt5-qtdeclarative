@@ -129,7 +129,7 @@ QQuickItem *QQuickPathViewPrivate::getItem(int modelIndex, qreal z, bool async)
     requestedIndex = modelIndex;
     requestedZ = z;
     inRequest = true;
-    QObject *object = model->object(modelIndex, async);
+    QObject *object = model->object(modelIndex, async ? QQmlIncubator::Asynchronous : QQmlIncubator::AsynchronousIfNested);
     QQuickItem *item = qmlobject_cast<QQuickItem*>(object);
     if (!item) {
         if (object) {
@@ -240,7 +240,11 @@ void QQuickPathViewPrivate::clear()
         releaseItem(currentItem);
         currentItem = nullptr;
     }
+
     for (QQuickItem *p : qAsConst(items))
+        releaseItem(p);
+
+    for (QQuickItem *p : qAsConst(itemCache))
         releaseItem(p);
 
     if (requestedIndex >= 0) {
@@ -250,6 +254,7 @@ void QQuickPathViewPrivate::clear()
     }
 
     items.clear();
+    itemCache.clear();
     tl.clear();
 }
 

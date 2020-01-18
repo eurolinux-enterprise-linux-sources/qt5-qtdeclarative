@@ -86,6 +86,7 @@ QT_BEGIN_NAMESPACE
 
 Q_DECLARE_LOGGING_CATEGORY(DBG_MOUSE_TARGET)
 Q_DECLARE_LOGGING_CATEGORY(DBG_HOVER_TRACE)
+Q_DECLARE_LOGGING_CATEGORY(lcTransient)
 
 void debugFocusTree(QQuickItem *item, QQuickItem *scope = 0, int depth = 1)
 {
@@ -121,6 +122,7 @@ void debugFocusTree(QQuickItem *item, QQuickItem *scope = 0, int depth = 1)
     \li \l Rotation
     \li \l Scale
     \li \l Translate
+    \li \l Matrix4x4
     \endlist
 
     The Transform types let you create and control advanced transformations that can be configured
@@ -968,7 +970,7 @@ bool QQuickKeysAttached::isConnected(const char *signalName) const
 
         Keys.onEscapePressed: {
             console.log("escapeItem is handling escape");
-            event.accepted = true;
+            // event.accepted is set to true by default for the specific key handlers
         }
     }
 
@@ -1806,10 +1808,10 @@ void QQuickItemPrivate::updateSubFocusItem(QQuickItem *scope, bool focus)
 
     \section1 Custom Scene Graph Items
 
-    All visual QML items are rendered using the scene graph, a
-    low-level, high-performance rendering stack, closely tied to
-    OpenGL. It is possible for subclasses of QQuickItem to add their
-    own custom content into the scene graph by setting the
+    All visual QML items are rendered using the scene graph, the default
+    implementation of which is a low-level, high-performance rendering stack,
+    closely tied to OpenGL. It is possible for subclasses of QQuickItem to add
+    their own custom content into the scene graph by setting the
     QQuickItem::ItemHasContents flag and reimplementing the
     QQuickItem::updatePaintNode() function.
 
@@ -2803,7 +2805,8 @@ void QQuickItem::stackBefore(const QQuickItem *sibling)
 {
     Q_D(QQuickItem);
     if (!sibling || sibling == this || !d->parentItem || d->parentItem != QQuickItemPrivate::get(sibling)->parentItem) {
-        qWarning("QQuickItem::stackBefore: Cannot stack before %p, which must be a sibling", sibling);
+        qWarning().nospace() << "QQuickItem::stackBefore: Cannot stack "
+            << this << " before " << sibling << ", which must be a sibling";
         return;
     }
 
@@ -2847,7 +2850,8 @@ void QQuickItem::stackAfter(const QQuickItem *sibling)
 {
     Q_D(QQuickItem);
     if (!sibling || sibling == this || !d->parentItem || d->parentItem != QQuickItemPrivate::get(sibling)->parentItem) {
-        qWarning("QQuickItem::stackAfter: Cannot stack after %p, which must be a sibling", sibling);
+        qWarning().nospace() << "QQuickItem::stackAfter: Cannot stack "
+            << this << " after " << sibling << ", which must be a sibling";
         return;
     }
 
@@ -3117,6 +3121,9 @@ void QQuickItemPrivate::itemToParentTransform(QTransform &t) const
 */
 QTransform QQuickItemPrivate::windowToGlobalTransform() const
 {
+    if (Q_UNLIKELY(window == nullptr))
+        return QTransform();
+
     QPoint quickWidgetOffset;
     QWindow *renderWindow = QQuickRenderControl::renderWindowFor(window, &quickWidgetOffset);
     QPointF pos = (renderWindow ? renderWindow : window)->mapToGlobal(quickWidgetOffset);
@@ -3128,6 +3135,9 @@ QTransform QQuickItemPrivate::windowToGlobalTransform() const
 */
 QTransform QQuickItemPrivate::globalToWindowTransform() const
 {
+    if (Q_UNLIKELY(window == nullptr))
+        return QTransform();
+
     QPoint quickWidgetOffset;
     QWindow *renderWindow = QQuickRenderControl::renderWindowFor(window, &quickWidgetOffset);
     QPointF pos = (renderWindow ? renderWindow : window)->mapToGlobal(quickWidgetOffset);
@@ -3247,11 +3257,13 @@ void QQuickItemPrivate::data_append(QQmlListProperty<QObject> *prop, QObject *o)
             }
 
             if (thisWindow) {
-                if (itemWindow)
+                if (itemWindow) {
+                    qCDebug(lcTransient) << thisWindow << "is transient for" << itemWindow;
                     thisWindow->setTransientParent(itemWindow);
-                else
+                } else {
                     QObject::connect(item, SIGNAL(windowChanged(QQuickWindow*)),
                                      thisWindow, SLOT(setTransientParent_helper(QQuickWindow*)));
+                }
             }
             o->setParent(that);
         }
@@ -3650,8 +3662,9 @@ QQmlListProperty<QObject> QQuickItemPrivate::data()
     \qmlproperty real QtQuick::Item::childrenRect.y
     \qmlproperty real QtQuick::Item::childrenRect.width
     \qmlproperty real QtQuick::Item::childrenRect.height
+    \readonly
 
-    This property holds the collective position and size of the item's
+    This read-only property holds the collective position and size of the item's
     children.
 
     This property is useful if you need to access the collective geometry
@@ -5767,19 +5780,24 @@ bool QQuickItem::isVisible() const
     return d->effectiveVisible;
 }
 
+void QQuickItemPrivate::setVisible(bool visible)
+{
+    if (visible == explicitVisible)
+        return;
+
+    explicitVisible = visible;
+    if (!visible)
+        dirty(QQuickItemPrivate::Visible);
+
+    const bool childVisibilityChanged = setEffectiveVisibleRecur(calcEffectiveVisible());
+    if (childVisibilityChanged && parentItem)
+        emit parentItem->visibleChildrenChanged();   // signal the parent, not this!
+}
+
 void QQuickItem::setVisible(bool v)
 {
     Q_D(QQuickItem);
-    if (v == d->explicitVisible)
-        return;
-
-    d->explicitVisible = v;
-    if (!v)
-        d->dirty(QQuickItemPrivate::Visible);
-
-    const bool childVisibilityChanged = d->setEffectiveVisibleRecur(d->calcEffectiveVisible());
-    if (childVisibilityChanged && d->parentItem)
-        emit d->parentItem->visibleChildrenChanged();   // signal the parent, not this!
+    d->setVisible(v);
 }
 
 /*!
@@ -7308,10 +7326,18 @@ void QQuickItem::unsetCursor()
 void QQuickItem::grabMouse()
 {
     Q_D(QQuickItem);
-    if (!d->window)
+    if (!d->window || d->window->mouseGrabberItem() == this)
         return;
     QQuickWindowPrivate *windowPriv = QQuickWindowPrivate::get(d->window);
-    windowPriv->setMouseGrabber(this);
+    bool fromTouch = windowPriv->isDeliveringTouchAsMouse();
+    auto point = fromTouch ?
+        windowPriv->pointerEventInstance(windowPriv->touchMouseDevice)->pointById(windowPriv->touchMouseId) :
+        windowPriv->pointerEventInstance(QQuickPointerDevice::genericMouseDevice())->point(0);
+    if (point) {
+        QQuickItem *oldGrabber = point->grabber();
+        point->setGrabber(this);
+        windowPriv->sendUngrabEvent(oldGrabber, fromTouch);
+    }
 }
 
 /*!
@@ -7329,7 +7355,7 @@ void QQuickItem::ungrabMouse()
     if (!d->window)
         return;
     QQuickWindowPrivate *windowPriv = QQuickWindowPrivate::get(d->window);
-    windowPriv->removeGrabber(this, true, false);
+    windowPriv->removeGrabber(this, true, (windowPriv->touchMouseId != -1 && windowPriv->touchMouseDevice));
 }
 
 

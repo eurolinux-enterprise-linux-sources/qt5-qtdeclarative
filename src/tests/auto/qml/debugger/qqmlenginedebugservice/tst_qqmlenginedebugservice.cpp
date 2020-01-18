@@ -99,6 +99,8 @@ private:
                              const QmlDebugObjectReference &oref,
                              bool recursive) const;
 
+    void getContexts();
+
     QQmlDebugConnection *m_conn;
     QQmlEngineDebugClient *m_dbg;
     QQmlEngine *m_engine;
@@ -138,6 +140,8 @@ private slots:
     void regression_QTCREATORBUG_7451();
     void queryObjectWithNonStreamableTypes();
     void asynchronousCreate();
+    void invalidContexts();
+    void createObjectOnDestruction();
 };
 
 QmlDebugObjectReference tst_QQmlEngineDebugService::findRootObject(
@@ -246,6 +250,22 @@ void tst_QQmlEngineDebugService::recursiveObjectTest(
 
         QVERIFY(pmeta.isValid());
     }
+}
+
+void tst_QQmlEngineDebugService::getContexts()
+{
+    bool success = false;
+
+    m_dbg->queryAvailableEngines(&success);
+    QVERIFY(success);
+    QVERIFY(QQmlDebugTest::waitForSignal(m_dbg, SIGNAL(result())));
+
+    QList<QmlDebugEngineReference> engines = m_dbg->engines();
+    QCOMPARE(engines.count(), 1);
+    m_dbg->queryRootContexts(engines.first().debugId, &success);
+
+    QVERIFY(success);
+    QVERIFY(QQmlDebugTest::waitForSignal(m_dbg, SIGNAL(result())));
 }
 
 void tst_QQmlEngineDebugService::initTestCase()
@@ -877,7 +897,8 @@ void tst_QQmlEngineDebugService::queryObjectWithNonStreamableTypes()
     QmlDebugObjectReference obj = m_dbg->object();
     QVERIFY(!obj.className.isEmpty());
 
-    QCOMPARE(findProperty(obj.properties, "modelIndex").value, QVariant());
+    QCOMPARE(findProperty(obj.properties, "modelIndex").value,
+             QVariant(QLatin1String("QModelIndex()")));
 }
 
 
@@ -1287,6 +1308,49 @@ void tst_QQmlEngineDebugService::asynchronousCreate() {
     QVERIFY(success);
 
     QTRY_COMPARE(m_dbg->object().idString, QLatin1String("asyncRect"));
+}
+
+void tst_QQmlEngineDebugService::invalidContexts()
+{
+    getContexts();
+    const int base = m_dbg->rootContext().contexts.count();
+    QQmlContext context(m_engine);
+    getContexts();
+    QCOMPARE(m_dbg->rootContext().contexts.count(), base + 1);
+    QQmlContextData *contextData = QQmlContextData::get(&context);
+    contextData->invalidate();
+    getContexts();
+    QCOMPARE(m_dbg->rootContext().contexts.count(), base);
+    QQmlContextData *rootData = QQmlContextData::get(m_engine->rootContext());
+    rootData->invalidate();
+    getContexts();
+    QCOMPARE(m_dbg->rootContext().contexts.count(), 0);
+    contextData->setParent(rootData); // makes context valid again, but not root.
+    getContexts();
+    QCOMPARE(m_dbg->rootContext().contexts.count(), 0);
+}
+
+void tst_QQmlEngineDebugService::createObjectOnDestruction()
+{
+    QSignalSpy spy(m_dbg, SIGNAL(newObject(int)));
+    {
+        QQmlEngine engine;
+        QQmlComponent component(&engine);
+        component.setData(
+                    "import QtQml 2.0;"
+                    "QtObject {"
+                        "property Component x:"
+                            "Qt.createQmlObject('import QtQml 2.0; Component { QtObject { } }',"
+                                                "this, 'x.qml');"
+                        "Component.onDestruction: x.createObject(this, {});"
+                    "}", QUrl::fromLocalFile("x.qml"));
+        QVERIFY(component.isReady());
+        QVERIFY(component.create());
+        QTRY_COMPARE(spy.count(), 2);
+    }
+    // Doesn't crash and doesn't give us another signal for the object created on destruction.
+    QTest::qWait(500);
+    QCOMPARE(spy.count(), 2);
 }
 
 int main(int argc, char *argv[])

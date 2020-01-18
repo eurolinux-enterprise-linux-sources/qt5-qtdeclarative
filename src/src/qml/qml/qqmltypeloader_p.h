@@ -98,6 +98,7 @@ public:
         Null,                    // Prior to QQmlTypeLoader::load()
         Loading,                 // Prior to data being received and dataReceived() being called
         WaitingForDependencies,  // While there are outstanding addDependency()s
+        ResolvingDependencies,   // While resolving outstanding dependencies, to detect cycles
         Complete,                // Finished
         Error                    // Error
     };
@@ -128,6 +129,7 @@ public:
     qreal progress() const;
 
     QUrl url() const;
+    QString urlString() const;
     QUrl finalUrl() const;
     QString finalUrlString() const;
 
@@ -206,6 +208,7 @@ private:
 
     QUrl m_url;
     QUrl m_finalUrl;
+    mutable QString m_urlString;
     mutable QString m_finalUrlString;
 
     // List of QQmlDataBlob's that are waiting for me to complete.
@@ -225,12 +228,16 @@ class QQmlTypeLoaderQmldirContent
 {
 private:
     friend class QQmlTypeLoader;
-    QQmlTypeLoaderQmldirContent();
 
     void setContent(const QString &location, const QString &content);
     void setError(const QQmlError &);
 
 public:
+    QQmlTypeLoaderQmldirContent();
+    QQmlTypeLoaderQmldirContent(const QQmlTypeLoaderQmldirContent &) = default;
+    QQmlTypeLoaderQmldirContent &operator=(const QQmlTypeLoaderQmldirContent &) = default;
+
+    bool hasContent() const { return m_hasContent; }
     bool hasError() const;
     QList<QQmlError> errors(const QString &uri) const;
 
@@ -247,6 +254,7 @@ public:
 private:
     QQmlDirParser m_parser;
     QString m_location;
+    bool m_hasContent = false;
 };
 
 class Q_QML_PRIVATE_EXPORT QQmlTypeLoader
@@ -301,7 +309,7 @@ public:
     QString absoluteFilePath(const QString &path);
     bool directoryExists(const QString &path);
 
-    const QQmlTypeLoaderQmldirContent *qmldirContent(const QString &filePath);
+    const QQmlTypeLoaderQmldirContent qmldirContent(const QString &filePath);
     void setQmldirContent(const QString &filePath, const QString &content);
 
     void clearCache();
@@ -474,7 +482,10 @@ private:
                  const QV4::CompiledData::ResolvedTypeReferenceMap &resolvedTypeCache, const QV4::CompiledData::DependentTypesHasher &dependencyHasher);
     void createTypeAndPropertyCaches(const QQmlRefPointer<QQmlTypeNameCache> &typeNameCache,
                                       const QV4::CompiledData::ResolvedTypeReferenceMap &resolvedTypeCache);
-    bool resolveType(const QString &typeName, int &majorVersion, int &minorVersion, TypeReference &ref, int lineNumber = -1, int columnNumber = -1, bool reportErrors = true);
+    bool resolveType(const QString &typeName, int &majorVersion, int &minorVersion,
+                     TypeReference &ref, int lineNumber = -1, int columnNumber = -1,
+                     bool reportErrors = true,
+                     QQmlType::RegistrationType registrationType = QQmlType::AnyRegistrationType);
 
     void scriptImported(QQmlScriptBlob *blob, const QV4::CompiledData::Location &location, const QString &qualifier, const QString &nameSpace) override;
 

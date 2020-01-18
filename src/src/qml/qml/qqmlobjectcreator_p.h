@@ -81,7 +81,7 @@ struct QQmlObjectCreatorSharedState : public QSharedData
     QRecursionNode recursionNode;
 };
 
-class QQmlObjectCreator
+class Q_QML_PRIVATE_EXPORT QQmlObjectCreator
 {
     Q_DECLARE_TR_FUNCTIONS(QQmlObjectCreator)
 public:
@@ -89,9 +89,9 @@ public:
     ~QQmlObjectCreator();
 
     QObject *create(int subComponentIndex = -1, QObject *parent = 0, QQmlInstantiationInterrupt *interrupt = 0);
-    bool populateDeferredProperties(QObject *instance);
+    bool populateDeferredProperties(QObject *instance, QQmlData::DeferredData *deferredData);
+    bool populateDeferredBinding(const QQmlProperty &qmlProperty, QQmlData::DeferredData *deferredData, const QV4::CompiledData::Binding *binding);
     QQmlContextData *finalize(QQmlInstantiationInterrupt &interrupt);
-    void cancel(QObject *object);
     void clear();
 
     QQmlComponentAttached **componentAttachment() const { return &sharedState->componentAttached; }
@@ -123,7 +123,8 @@ private:
 
     void registerObjectWithContextById(const QV4::CompiledData::Object *object, QObject *instance) const;
 
-    QV4::Heap::QmlContext *currentQmlContext();
+    inline QV4::Heap::QmlContext *currentQmlContext();
+    Q_NEVER_INLINE void createQmlContext();
 
     enum Phase {
         Startup,
@@ -136,7 +137,7 @@ private:
 
     QQmlEngine *engine;
     QV4::ExecutionEngine *v4;
-    QV4::CompiledData::CompilationUnit *compilationUnit;
+    QQmlRefPointer<QV4::CompiledData::CompilationUnit> compilationUnit;
     const QV4::CompiledData::Unit *qmlUnit;
     QQmlGuardedContextData parentContext;
     QQmlContextData *context;
@@ -160,6 +161,9 @@ private:
     QV4::QmlContext *_qmlContext;
 
     friend struct QQmlObjectCreatorRecursionWatcher;
+
+    typedef std::function<bool(QQmlObjectCreatorSharedState *sharedState)> PendingAliasBinding;
+    std::vector<PendingAliasBinding> pendingAliasBindings;
 };
 
 struct QQmlObjectCreatorRecursionWatcher
@@ -172,6 +176,14 @@ private:
     QExplicitlySharedDataPointer<QQmlObjectCreatorSharedState> sharedState;
     QRecursionWatcher<QQmlObjectCreatorSharedState, &QQmlObjectCreatorSharedState::recursionNode> watcher;
 };
+
+QV4::Heap::QmlContext *QQmlObjectCreator::currentQmlContext()
+{
+    if (Q_UNLIKELY(!_qmlContext->isManaged()))
+        createQmlContext(); // less common slow path
+
+    return _qmlContext->d();
+}
 
 QT_END_NAMESPACE
 

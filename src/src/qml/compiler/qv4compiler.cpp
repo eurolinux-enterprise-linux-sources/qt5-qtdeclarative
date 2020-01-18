@@ -212,6 +212,7 @@ int QV4::Compiler::JSUnitGenerator::registerJSClass(int count, IR::ExprList *arg
 QV4::CompiledData::Unit *QV4::Compiler::JSUnitGenerator::generateUnit(GeneratorOption option)
 {
     registerString(irModule->fileName);
+    registerString(irModule->finalUrl);
     for (QV4::IR::Function *f : qAsConst(irModule->functions)) {
         registerString(*f->name);
         for (int i = 0; i < f->formals.size(); ++i)
@@ -297,6 +298,9 @@ void QV4::Compiler::JSUnitGenerator::writeFunction(char *f, QV4::IR::Function *i
     if (irFunction->hasTry || irFunction->hasWith)
         function->flags |= CompiledData::Function::HasCatchOrWith;
     function->nFormals = irFunction->formals.size();
+    function->nestedFunctionIndex =
+            irFunction->returnsClosure ? quint32(irModule->functions.indexOf(irFunction->nestedFunctions.first()))
+                                       : std::numeric_limits<uint32_t>::max();
     function->formalsOffset = currentOffset;
     currentOffset += function->nFormals * sizeof(quint32);
 
@@ -427,6 +431,7 @@ QV4::CompiledData::Unit QV4::Compiler::JSUnitGenerator::generateHeader(QV4::Comp
     }
     unit.indexOfRootFunction = -1;
     unit.sourceFileIndex = getStringId(irModule->fileName);
+    unit.finalUrlIndex = getStringId(irModule->finalUrl);
     unit.sourceTimeStamp = irModule->sourceTimeStamp.isValid() ? irModule->sourceTimeStamp.toMSecsSinceEpoch() : 0;
     unit.nImports = 0;
     unit.offsetToImports = 0;

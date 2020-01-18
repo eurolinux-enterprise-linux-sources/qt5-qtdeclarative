@@ -1405,6 +1405,12 @@ QString registrationTypeString(QQmlType::RegistrationType typeType)
 bool checkRegistration(QQmlType::RegistrationType typeType, QQmlMetaTypeData *data, const char *uri, const QString &typeName, int majorVersion = -1)
 {
     if (!typeName.isEmpty()) {
+        if (typeName.at(0).isLower()) {
+            QString failure(QCoreApplication::translate("qmlRegisterType", "Invalid QML %1 name \"%2\"; type names must begin with an uppercase letter"));
+            data->typeRegistrationFailures.append(failure.arg(registrationTypeString(typeType)).arg(typeName));
+            return false;
+        }
+
         int typeNameLen = typeName.length();
         for (int ii = 0; ii < typeNameLen; ++ii) {
             if (!(typeName.at(ii).isLetterOrNumber() || typeName.at(ii) == '_')) {
@@ -1648,6 +1654,9 @@ int QQmlPrivate::qmlregister(RegistrationType type, void *data)
     else if (type == CompositeSingletonRegistration)
         dtype = QQmlMetaType::registerCompositeSingletonType(*reinterpret_cast<RegisterCompositeSingletonType *>(data));
     else
+        return -1;
+
+    if (!dtype.isValid())
         return -1;
 
     QMutexLocker lock(metaTypeDataLock());
@@ -2236,6 +2245,27 @@ QQmlPropertyCache *QQmlMetaType::propertyCache(const QQmlType &type, int minorVe
     QMutexLocker lock(metaTypeDataLock());
     QQmlMetaTypeData *data = metaTypeData();
     return data->propertyCache(type, minorVersion);
+}
+
+void qmlUnregisterType(int typeIndex)
+{
+    QMutexLocker lock(metaTypeDataLock());
+    QQmlMetaTypeData *data = metaTypeData();
+    {
+        const QQmlTypePrivate *d = data->types.value(typeIndex).priv();
+        if (d) {
+            removeQQmlTypePrivate(data->idToType, d);
+            removeQQmlTypePrivate(data->nameToType, d);
+            removeQQmlTypePrivate(data->urlToType, d);
+            removeQQmlTypePrivate(data->urlToNonFileImportType, d);
+            removeQQmlTypePrivate(data->metaObjectToType, d);
+            for (QQmlMetaTypeData::TypeModules::Iterator module = data->uriToModule.begin(); module != data->uriToModule.end(); ++module) {
+                 QQmlTypeModulePrivate *modulePrivate = (*module)->priv();
+                 modulePrivate->remove(d);
+            }
+            data->types[typeIndex] = QQmlType();
+        }
+    }
 }
 
 void QQmlMetaType::freeUnusedTypesAndCaches()

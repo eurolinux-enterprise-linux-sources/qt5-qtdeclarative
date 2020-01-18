@@ -24,7 +24,7 @@
 
 Summary: Qt5 - QtDeclarative component
 Name:    qt5-%{qt_module}
-Version: 5.9.2
+Version: 5.9.7
 Release: 1%{?dist}
 
 # See LICENSE.GPL LICENSE.LGPL LGPL_EXCEPTION.txt, for details
@@ -46,6 +46,11 @@ Patch1: qtdeclarative-opensource-src-5.9.0-no_sse2.patch
 Patch2: qtdeclarative-QQuickShaderEffectSource_deadlock.patch
 
 ## upstream patches
+# https://codereview.qt-project.org/#/c/224684/
+Patch100: qtdeclarative-leak.patch
+
+# 5.11 branch fixes
+Patch128: 0028-Rebuild-property-cache-in-QObjectWrapper-getProperty.patch
 
 ## upstreamable patches
 
@@ -120,6 +125,11 @@ Requires: %{name}%{?_isa} = %{version}-%{release}
 %patch1 -p1 -b .no_sse2
 %endif
 %patch2 -p1 -b .QQuickShaderEffectSource_deadlock
+
+%patch100 -p1 -b .memleak
+
+%patch128 -p1 -b .0028
+
 %patch201 -p0 -b .kdebug346118
 %patch202 -p1 -b .no_sse2_non_fatal
 
@@ -265,6 +275,10 @@ make check -k -C tests ||:
 
 
 %changelog
+* Thu Feb 07 2019 Jan Grulich <jgrulich@redhat.com> - 5.9.7-1
+- Update to 5.9.7
+  Resolves: bz#1564003
+
 * Fri Oct 06 2017 Jan Grulich <jgrulich@redhat.com> - 5.9.2-1
 - Update to 5.9.2
   Resolves: bz#1482778
